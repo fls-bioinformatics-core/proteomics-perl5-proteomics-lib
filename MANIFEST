@@ -3,6 +3,7 @@ Makefile.PL
 MANIFEST
 README
 t/Proteomics-AminoAcidProperties.t
+t/Proteomics-DigestionEnzyme.t
 t/Proteomics-Trypsin.t
 t/Proteomics-Utils.t
 lib/Proteomics.pm
