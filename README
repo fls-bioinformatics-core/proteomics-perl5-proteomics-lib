@@ -1,0 +1,30 @@
+Proteomics version 1.00
+=======================
+
+A set of library files for Perl that are useful in Proteomics
+analysis.  Currently the library includes functions for digesting
+proteins.
+
+The library makes use of Bio::Perl, which seems to have stabalised,
+although where possible there are alternatives provided if you wish to
+save some memory.
+
+INSTALLATION
+
+* please read the INSTALL file *
+
+DEPENDENCIES
+
+* please read the INSTALL file *
+
+COPYRIGHT AND LICENCE
+
+Put the correct copyright and licence information here.
+
+Copyright (C) 2008 by Julian Selley
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself, either Perl version 5.10.0 or,
+at your option, any later version of Perl 5 you may have available.
+
+

@@ -1,0 +1,12 @@
+INSTALL
+Makefile.PL
+MANIFEST
+README
+t/Proteomics-AminoAcidProperties.t
+t/Proteomics-Trypsin.t
+t/Proteomics-Utils.t
+lib/Proteomics.pm
+lib/Proteomics/AminoAcidProperties.pm
+lib/Proteomics/DigestionEnzyme.pm
+lib/Proteomics/Trypsin.pm
+lib/Proteomics/Utils.pm
