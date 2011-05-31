@@ -63,6 +63,7 @@ our $VERSION = '1.00';
 
 
 use Proteomics::AminoAcidProperties qw(:all);
+use Proteomics::MascotDatabase;
 use Proteomics::Trypsin;
 use Proteomics::Utils qw(:all);
 
