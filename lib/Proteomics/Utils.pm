@@ -88,7 +88,7 @@ use Proteomics::AminoAcidProperties qw(:all);
 =cut
 sub calculateAverageMass {
   # get arguments
-  my ($self, $sequence) =@_;
+  my ($self, $sequence) = @_;
   # if only one argument supplied (i.e., we have been called statically)
   $sequence = $self if (not defined $sequence);
   # exit if no sequence provided
