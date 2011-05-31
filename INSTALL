@@ -16,6 +16,8 @@ This module requires these other modules and libraries:
 
   Carp
   BioPerl
+  DBI
+  AppConfig
 
 COPYRIGHT AND LICENCE
 
