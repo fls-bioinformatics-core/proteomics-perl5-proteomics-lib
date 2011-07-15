@@ -33,6 +33,7 @@ is_deeply(\@rows,
           [{ 'Tables_in_mascot_test' => 'modification' },
            { 'Tables_in_mascot_test' => 'pep' },
            { 'Tables_in_mascot_test' => 'pep_has_modification' },
+           { 'Tables_in_mascot_test' => 'phospho_prot_view' },
            { 'Tables_in_mascot_test' => 'prot' },
            { 'Tables_in_mascot_test' => 'prot_has_pep' },
            { 'Tables_in_mascot_test' => 'query' },
@@ -52,7 +53,7 @@ my $search_id = $db->insert_search(searchtitle => 'Submitted from 20110125 JR by
   user => 'Stacey Warwood',
   reporturi => 'http://msct/mascot/cgi/master_results.pl?file=../data/20110125/F291524534.dat',
   database => 'IPI_mouse');
-$search_id = $db->insert_search(id => $search_id, significancethreshold => 0.05, maxnumberofhits => 0, usemudpitproteinscoring => 1, ionsscorecutoff => 0, includesamesetproteins => 0, includesubsetproteins => 0, includeunassigned => 0, requireboldred => 0);
+$search_id = $db->insert_search(id => $search_id, significancethreshold => 0.05, maxnumberofhits => 0, usemudpitproteinscoring => 1, ionsscorecutoff => 0, includesamesetproteins => 0, includesubsetproteins => 0, includeunassigned => 0, requireboldred => 0, num_queries => 1000);
 print "search_id: $search_id\n";
 ## TODO 2011/03/25 ! JNS: check data added successfully
 
