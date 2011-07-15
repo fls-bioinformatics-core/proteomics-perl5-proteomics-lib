@@ -1,5 +1,3 @@
-# $Id: $
-
 ##
 ## Perl module for inputing data into Mascot database (version 2.0)
 ##
@@ -10,8 +8,8 @@
 
 =head1 NAME
 
-Proteomics::MascotDatabase - Provides connection to the database and means to
-                             add data to the database
+Proteomics::MascotDatabase - Provides connection to the database and means
+                             to add data to the database
 
 =head1 SYNOPSIS
 
@@ -58,7 +56,7 @@ use strict;
 use warnings;
 
 use base qw(Exporter);
-our $VERSION = '2.01';  # to connect to version 2.0 of the database
+our $VERSION = '3.01';  # to connect to version 3.0 of the database
 
 ## IMPORT
 use AppConfig qw(:expand);
@@ -132,8 +130,8 @@ sub new {
     $args{'options'}  = $config->database_options;
   }
 
-  # if there is a connection already specified, use that, otherwise create the
-  # connection to the database based on parameters
+  # if there is a connection already specified, use that, otherwise create
+  # the connection to the database based on parameters
   if (defined $args{'connection'} && ref $args{'connection'} eq "DBI::db") {
     $this->{_conn} = $args{'connection'};
   } else {
@@ -144,6 +142,29 @@ sub new {
                                   $args{'password'},
                                   { eval($args{'options'}) }) or
       carp "ERROR: Connection to database unsuccessful: " . $DBI::errstr;
+  }
+
+  # get list of tables (and views)
+  my @tbls = $this->{'_conn'}->tables();
+  $this->{'_tables'} = \@tbls;
+  # get columns for each table
+  foreach my $tbl (@tbls) {
+    $tbl =~ s/\`//g;
+    $tbl =~ s/.+\.(.+)/$1/;
+    my @cols = ();
+    my @req_cols = ();
+    my $sh = $this->{'_conn'}->prepare('DESC ' . $tbl);
+    $sh->execute();
+    while (my $col = $sh->fetchrow_hashref()) {
+      push @cols, $col->{'Field'};
+      push @req_cols, $col->{'Field'}
+        if ($col->{'Null'} =~ m/^NO$/i && 
+            ! defined $col->{'Default'} && 
+            ! defined $col->{'Extra'});
+    }
+    # store the columns
+    $this->{'_table_struct'}->{$tbl} = \@cols;
+    $this->{'_table_required_columns'}->{$tbl} = \@req_cols;
   }
 
   return bless $this, $class;
@@ -182,12 +203,14 @@ sub get_modification {
   my $this = shift;
   my %args = @_;
 
-  my $sql_get_modification = "SELECT * FROM `modification` WHERE <ARGUMENTS> LIMIT 1";
+  my $sql_get_modification = "SELECT * FROM `modification` " .
+                             "WHERE <ARGUMENTS> LIMIT 1";
   my $mod = undef;
 
   # check mods stored in object
   return $this->{_modifications}->[$args{'Identifier'}]
-    if (defined $args{'Identifier'} && defined $this->{_modifications}->[$args{'Identifier'}]);
+    if (defined $args{'Identifier'} && 
+        defined $this->{_modifications}->[$args{'Identifier'}]);
   if (defined $args{'Name'}) {
     for (my $mi = 0; $mi < @{$this->{_modifications}}; $mi++) {
       return $this->{_modifications}->[$mi]
@@ -236,6 +259,14 @@ sub insert_modification {
   my $this = shift;
   my %args = @_;
 
+  # return if the required arguments aren't supplied
+  my @req_cols = (@{$this->{'_table_required_columns'}->{'modification'}});
+  foreach my $req_col (@req_cols) {
+    carp "WARNING: required arguments not supplied to insert_modification ($req_col)"
+      if (! defined $args{$req_col});
+  }
+
+  # sql statements
   my $sql_get_modification    = "SELECT * FROM `modification` WHERE <ARGUMENTS> LIMIT 1";
   my $sql_insert_modification = "INSERT INTO `modification` SET <ARGUMENTS>";
 
@@ -289,258 +320,231 @@ sub insert_modification {
   return $this->{'_last_inserted_modificaiton_id'};
 }
 
-=head2 insert_pep
+=head2 
 
  Title:     insert_pep
- Usage:     $db_obj->insert_pep(...);
- Function:  inserts the information for a peptide into the database
- Returns:   the pep_id from the database
- Arguments: the columns and values to be inserted
+ Usage:     
+ Function:  
+ Returns:   
+ Arguments: 
 
 =cut
 sub insert_pep {
-  my $this  = shift;
+  my $this = shift;
   my $search_id = $this->last_inserted_search_id();
+  my $prot_id   = $this->last_inserted_prot_id();
+  my $pep_id    = undef;
+  my $query_id  = undef;
   my %args = @_;
 
-  my $sql_check_pep_exists     = "SELECT * FROM `pep` WHERE `search_id` = ? AND `rank` = ? AND " .
-                                 "`exp_mz` = ? AND `exp_z` = ? AND `calc_mr` = ? AND " .
-                                 "`delta` = ? AND `score` = ? AND `expect` = ? AND " .
-                                 "`seq` = ? AND `num_match` = ? AND `scan_title` = ?";
-  my $sql_insert_pep           = "INSERT INTO `pep` SET <ARGUMENTS>";
-  my $sql_update_pep           = "UPDATE `pep` SET <ARGUMENTS> WHERE `id` = ?";
-  my $sql_insert_prot_has_pep  = "INSERT INTO `prot_has_pep` SET " . 
-                                 "`search_id` = <SID>, `prot_id` = <PID>, " . 
-                                 "`pep_id` = <PPID>";
-  my $sql_check_query_exists   = "SELECT `id` FROM `query` WHERE `search_id` = ? AND `query_number` = ?";
-  my $sql_check_query_has_pep_exists = "SELECT * FROM `query_has_pep` " . 
-                                       "WHERE `search_id` = <SID> AND " .
-                                       "`query_id` = <QID> AND " .
-                                       "`pep_id` = <PPID>";
-  my $sql_check_pep_has_modification = "SELECT * FROM `pep_has_modification` " .
-                                       "WHERE `pep_id` = ? AND `modification_id` = ? AND " .
-                                       "`position` = ?";
-  my $sql_insert_query         = "INSERT INTO `query` SET `search_id` = ?, `query_number` = ?";
-  my $sql_insert_query_has_pep = "INSERT INTO `query_has_pep` SET " .
-                                "`search_id` = <SID>, `query_id` = <QID>, " .
-                                "`pep_id` = <PPID>";
-  my $sql_insert_pep_has_modification = "INSERT INTO `pep_has_modification` " .
-                                        "SET `pep_id` = ?, " .
-                                        "`modification_id` = ?, " .
-                                        "`position` = ?";
-
-  # collate arguments
-  my $collated_arguments_str  = "";
-  my @collated_arguments_vals = ();
-  # update pep information if the pep is already present in the database
-  my $update_pep = 0;
-  my $update_pep_row = undef;
-  my $sh = $this->{_conn}->prepare($sql_check_pep_exists);
-  my $success = $sh->execute($search_id,
-                             $args{'rank'} || $args{'pep_rank'}, 
-                             $args{'exp_mz'} || $args{'pep_exp_mz'}, 
-                             $args{'exp_z'} || $args{'pep_exp_z'},
-                             $args{'calc_mr'} || $args{'pep_calc_mr'},
-                             $args{'delta'} || $args{'pep_delta'},
-                             $args{'score'} || $args{'pep_score'},
-                             $args{'expect'} || $args{'pep_expect'},
-                             $args{'seq'} || $args{'pep_seq'}, 
-                             $args{'num_match'} || $args{'pep_num_match'},
-                             $args{'scan_title'} || $args{'pep_scan_title'});
-  if (defined $success && $success != 0 && $sh->rows > 0) {
-    $update_pep = 1;
-    $update_pep_row = $sh->fetchrow_hashref;
+  # return if the required arguments aren't supplied
+  my @req_cols = (@{$this->{'_table_required_columns'}->{'pep'}}, @{$this->{'_table_required_columns'}->{'prot_has_pep'}});
+  foreach my $req_col (@req_cols) {
+    carp "WARNING: required arguments not supplied to insert_pep ($req_col)"
+      if (! defined $args{$req_col} && ! defined $args{'pep_' . $req_col});
   }
 
-  my @arg_keys = keys %args;
-  for (my $ai = 0; $ai < @arg_keys; $ai++) {
-    next if ($arg_keys[$ai] eq "pep_query" || $arg_keys[$ai] =~ /^pep_var_mod/ || $args{$arg_keys[$ai]} eq "" || $arg_keys[$ai] eq "DONT_INSERT_PROT_HAS_PEP");
-    my $key = $arg_keys[$ai];
-    next if (! defined $args{$key} || $args{$key} eq "" || ($update_pep && defined $update_pep_row->{$key} && $update_pep_row->{$key} eq $args{$key}));
+  # sql statements
+  my $sql_insert_pep = "INSERT INTO `pep` SET `search_id` = ?, <ARGUMENTS>";
+  my $sql_insert_prot_has_pep = "INSERT INTO `prot_has_pep` SET `search_id` = $search_id, `prot_id` = $prot_id, `pep_id` = ?, <ARGUMENTS>";
+  my $sql_insert_pep_has_modification = "INSERT INTO `pep_has_modification` SET `pep_id` = ?, `modification_id` = ?, `position` = ?";
+  my $sql_insert_query = "INSERT INTO `query` SET `search_id` = $search_id, `query_number` = ?";
+  my $sql_insert_query_has_pep = "INSERT INTO `query_has_pep` SET `search_id` = $search_id, `query_id` = ?, `pep_id` = ?, <ARGUMENTS>";
+
+  # argument variables
+  my $pep_collated_args_str  = "";
+  my @pep_collated_args_vals = ();
+  my $php_collated_args_str  = "";
+  my @php_collated_args_vals = ();
+  my @phm_collated_args_vals = ();
+  my @q_collated_args_vals   = ();
+  my $qhp_collated_args_str  = "";
+  my @qhp_collated_args_vals = ();
+
+  # sort out arguments to correct tables
+  my @args_keys = keys %args;
+  for (my $ai = 0; $ai < @args_keys; $ai++) {
+    my $key = $args_keys[$ai];
     $key =~ s/^pep_//;
-    $collated_arguments_str .= "`" . $key . "` = ?, ";
-    push @collated_arguments_vals, $args{$arg_keys[$ai]};
-  }
-#  $collated_arguments_str =~ s/, $//;
-  $collated_arguments_str .= "`search_id` = ?";
-  push @collated_arguments_vals, $search_id;
-  push @collated_arguments_vals, $update_pep_row->{'id'} if ($update_pep);
-
-  # determine correct SQL and put in arguments
-  my $sql_pep = ($update_pep) ? $sql_update_pep : $sql_insert_pep;
-  $sql_pep =~ s/<ARGUMENTS>/$collated_arguments_str/;
-
-  # execute SQL
-  $sh = $this->{_conn}->prepare($sql_pep);
-  if ($update_pep && defined $update_pep_row->{'scan_title'} && $update_pep_row->{'scan_title'} ne $args{'pep_scan_title'}) { print STDERR "\nupdating peptide: $update_pep_row->{'id'}\nprev_scan_title: $update_pep_row->{'scan_title'}, new_scan_title: $args{'pep_scan_title'}\nsql: $sql_pep\nargs: @collated_arguments_vals\n\n"; }
-  $success = $sh->execute(@collated_arguments_vals);
-  if (defined $success && $success != 0) {
-    if ($update_pep) {
-      $this->{'_last_inserted_pep_id'} = $update_pep_row->{'id'};
-    } else {
-      $this->{'_last_inserted_pep_id'} = $this->{_conn}->last_insert_id(undef, undef, 'pep', 'id');
-    }
-  } else {
-    carp "WARNING: failed to insert pep to database ($this->{_conn}->errstr)";
-  }
-
-#  my $search_id = $this->last_inserted_search_id();
-  my $prot_id   = $this->last_inserted_prot_id();
-  my $pep_id    = $this->last_inserted_pep_id();
-  if (! defined $args{'DONT_INSERT_PROT_HAS_PEP'}) {
-    # insert information regarding the protein->peptide link
-    $sql_insert_prot_has_pep =~ s/<SID>/$search_id/;
-    $sql_insert_prot_has_pep =~ s/<PID>/$prot_id/;
-    $sql_insert_prot_has_pep =~ s/<PPID>/$pep_id/;
-    if (! $update_pep) {
-      $sh = $this->{_conn}->prepare($sql_insert_prot_has_pep);
-      $success = $sh->execute();
-      if (! defined $success || $success == 0) {
-        carp "WARNING: failed to insert prot_has_pep to database ($this->{_conn}->errstr)";
-      }
-    }
-  }
-
-  # insert modification positions (if they exist)
-  if (defined $args{'pep_var_mod_pos'} && $args{'pep_var_mod_pos'} ne "") {
-    my $shc = $this->{_conn}->prepare($sql_check_pep_has_modification);
-    $sh = $this->{_conn}->prepare($sql_insert_pep_has_modification);
-    my @mod_pos = split //, $args{'pep_var_mod_pos'};
-    my $offset = 0;
-    for (my $mpi = 0; $mpi < @mod_pos; $mpi++) {
-      next if ($mod_pos[$mpi] =~ /^[0-9]$/ && $mod_pos[$mpi] == 0);
-      if ($mod_pos[$mpi] eq '.') {
-        $offset++;
-        next;
-      }
-      my $mod = $this->get_modification(Identifier => $mod_pos[$mpi]);
-      # see if the mod already documented
-      $success = $shc->execute($pep_id, $mod->{'DBID'}, $mpi - $offset);
-      # if it isn't, then store it
-      if ((! defined $success || $success == 0) && defined $shc->rows && $shc->rows == 0) {
-        $success = $sh->execute($pep_id, $mod->{'DBID'}, $mpi - $offset);
-        if (! defined $success || $success == 0) {
-          carp "WARNING: failed to insert pep_has_modification to database (" . DBI::errstr . ")";
+    if ($key ~~ @{$this->{'_table_struct'}->{'pep'}}) {
+      $pep_collated_args_str .= "`" . $key . "` = ?, ";
+      push @pep_collated_args_vals, $args{$args_keys[$ai]};
+    } elsif ($key ~~ @{$this->{'_table_struct'}->{'prot_has_pep'}}) {
+      $php_collated_args_str .= "`" . $key . "` = ?, ";
+      push @php_collated_args_vals, $args{$args_keys[$ai]};
+    } elsif ($key ~~ @{$this->{'_table_struct'}->{'query_has_pep'}}) {
+      $qhp_collated_args_str .= "`" . $key . "` = ?, ";
+      push @qhp_collated_args_vals, $args{$args_keys[$ai]};
+    } elsif ($key =~ /query/) {
+      push @q_collated_args_vals, $args{$args_keys[$ai]};
+    } elsif ($key =~ /var_mod_pos/ && defined $args{$args_keys[$ai]} && 
+             $args{$args_keys[$ai]} ne "") {
+      my @mod_pos = split //, $args{$args_keys[$ai]};
+      my $offset = 0;
+      for (my $mpi = 0; $mpi < @mod_pos; $mpi++) {
+        next if ($mod_pos[$mpi] =~ /^[0-9]$/ && $mod_pos[$mpi] == 0);
+        if ($mod_pos[$mpi] eq '.') {
+          $offset++;
+          next;
         }
+        my $mod = $this->get_modification(Identifier => $mod_pos[$mpi]);
+        my @phm_vals = ();
+        push @phm_vals, $mod->{'DBID'};
+        push @phm_vals, $mpi - $offset;
+        push @phm_collated_args_vals, \@phm_vals;
       }
     }
   }
+  $pep_collated_args_str =~ s/, $//;
+  $php_collated_args_str =~ s/, $//;
+  $qhp_collated_args_str =~ s/, $//;
 
-  # check whether the query exists
-  $sh = $this->{_conn}->prepare($sql_check_query_exists);
-  $success = $sh->execute($search_id, $args{'pep_query'});
-  if (! defined $success || $success == 0) {
-    # insert the base of the query
-    $sh = $this->{_conn}->prepare($sql_insert_query);
-    $success = $sh->execute($search_id, $args{'pep_query'});
-    if (! defined $success || $success == 0) {
-      carp "WARNING: failed to insert query to database (" . DBI::errstr . ")";
-    }
-    $this->{'_last_inserted_query_id'} = $this->{_conn}->last_insert_id(undef, undef, 'query', 'id');
+  # insert peptide info
+  $sql_insert_pep =~ s/<ARGUMENTS>/$pep_collated_args_str/;
+  my $sh = $this->{'_conn'}->prepare($sql_insert_pep);
+  my $success = $sh->execute($search_id, @pep_collated_args_vals);
+  if ($success) {
+    $pep_id = $this->{'_conn'}->last_insert_id(undef, undef, 'pep', 'id');
+    $this->{'_last_inserted_pep_id'} = $pep_id;
   } else {
-    my $row = $sh->fetchrow_hashref;
-    $this->{'last_inserted_query_id'} = $row->{'id'};
+    my $sql_get_duplicate_entry = 
+      "SELECT `id` FROM `pep` " .
+      " WHERE `search_id` = ? " .
+      "  AND `scan_title` = ? " .
+      "  AND `exp_mz` = ? " .
+      "  AND `seq` = ? " .
+      "  AND `score` = ? " .
+      "LIMIT 1";
+      $sh = $this->{'_conn'}->prepare($sql_get_duplicate_entry);
+      $success = $sh->execute($search_id, 
+        $args{'scan_title'} || $args{'pep_scan_title'},
+        $args{'exp_mz'} || $args{'pep_exp_mz'},
+        $args{'seq'} || $args{'pep_seq'},
+        $args{'score'} || $args{'pep_score'});
+      if ($success) {
+        $pep_id = $sh->fetchrow_hashref->{'id'};
+        $this->{'_last_inserted_pep_id'} = $pep_id;
+      } else {
+        carp "WARNING: failed to insert pep ($this->{'_conn'}->errstr)";
+      }
   }
 
-  # check whether the link exists
-  $sql_check_query_has_pep_exists =~ s/<SID>/$search_id/g;
-  $sql_check_query_has_pep_exists =~ s/<QID>/$this->{'_last_inserted_query_id'}/g;
-  $sql_check_query_has_pep_exists =~ s/<PPID>/$pep_id/g;
-  $sh = $this->{_conn}->prepare($sql_check_query_has_pep_exists);
-  $success = $sh->execute();
-  if (! defined $success || $success == 0 || $sh->rows == 0) {
-    # insert link from query to pep
-    $sql_insert_query_has_pep =~ s/<SID>/$search_id/g;
-    $sql_insert_query_has_pep =~ s/<QID>/$this->{'_last_inserted_query_id'}/g;
-    $sql_insert_query_has_pep =~ s/<PPID>/$pep_id/g;
-    $sh = $this->{_conn}->prepare($sql_insert_query_has_pep);
-    $success = $sh->execute();
-    if (! defined $success || $success == 0) {
-      carp "WARNING: failed to insert query_has_pep to database (" . DBI::errstr . ")";
+  if (defined caller(1) && 
+      (caller(1))[3] ne "Proteomics::MascotDatabase::insert_query") {
+    # insert link to protein
+    $sql_insert_prot_has_pep =~ s/<ARGUMENTS>/$php_collated_args_str/;
+    $sh = $this->{'_conn'}->prepare($sql_insert_prot_has_pep);
+    $sh->execute($pep_id, @php_collated_args_vals);
+
+    # insert query
+    if (@q_collated_args_vals != 0) {
+      $sh = $this->{'_conn'}->prepare($sql_insert_query);
+      $success = $sh->execute(@q_collated_args_vals);
+    }
+  }
+
+  # insert query has pep link
+  if ($success) {
+    if (defined caller(1) && (caller(1))[3] eq "Proteomics::MascotDatabase::insert_query") {
+      $query_id = $this->last_inserted_query_id();
+    } else {
+      $query_id = $this->{'_conn'}->last_insert_id(undef, undef, 'query', 'id');
+      $this->{'_last_inserted_query_id'} = $query_id;
+    }
+    if ($query_id != 0 && $pep_id != 0) {
+      $sql_insert_query_has_pep =~ s/<ARGUMENTS>/$qhp_collated_args_str/;
+      $sh = $this->{'_conn'}->prepare($sql_insert_query_has_pep);
+      $sh->execute($query_id, $pep_id, @qhp_collated_args_vals);
+    }
+  }
+
+  # insert link to modification (if present)
+  if (defined $args{'pep_var_mod_pos'} || defined $args{'var_mod_pos'}) {
+    $sh = $this->{'_conn'}->prepare($sql_insert_pep_has_modification);
+    for (my $phmcavi = 0; $phmcavi < @phm_collated_args_vals; $phmcavi++) {
+      $sh->execute($pep_id, @{$phm_collated_args_vals[$phmcavi]});
     }
   }
 
   return $this->{'_last_inserted_pep_id'};
 }
 
-=head2 insert_prot
+=head2 
 
  Title:     insert_prot
- Usage:     $db_obj->insert_prot(...);
- Function:  inserts the information for a protein into the database
- Returns:   the prot_id from the database
- Arguments: the columns and values to be inserted
+ Usage:     
+ Function:  
+ Returns:   
+ Arguments: 
 
 =cut
 sub insert_prot {
-  my $this  = shift;
+  my $this = shift;
+  my $search_id = $this->last_inserted_search_id();
+  my $prot_id   = undef;
   my %args = @_;
 
-  my $sql_insert_prot       = "INSERT INTO `prot` SET `search_id` = " .
-                              $this->{'_last_inserted_search_id'} . ", <ARGUMENTS>";
-  my $sql_update_prot       = "UPDATE `prot` SET <ARGUMENTS> WHERE `id` = ? " .
-                              "AND `search_id` = " . $this->{'_last_inserted_search_id'};
-  my $sql_check_prot_exists = "SELECT `id` FROM `prot` WHERE `id` = ?";
-
-  my $update_prot = 0;
-
-  # check for an id in the arguments supplied, and check it is in the database
-  # before commiting to updating the database rather than inserting
-  if (defined $args{'id'} && $args{'id'} != 0 && $args{'id'} =~ /^[0-9]+$/) {
-    my $sh = $this->{_conn}->prepare($sql_check_prot_exists);
-    $sh->execute($args{'id'});
-    $update_prot = 1 if ($sh->rows > 0);
+  # return if the required arguments aren't supplied
+  my @req_cols = (@{$this->{'_table_required_columns'}->{'prot'}});
+  foreach my $req_col (@req_cols) {
+    carp "WARNING: required arguments not supplied to insert_prot ($req_col)"
+      if (! defined $args{$req_col} && ! defined $args{'prot_' . $req_col});
   }
 
-  # collate arguments
-  my $collated_arguments_str  = "";
-  my @collated_arguments_vals = ();
-  my @arg_keys = keys %args;
-  for (my $ai = 0; $ai < @arg_keys; $ai++) {
-    my $key = $arg_keys[$ai];
+  # sql statements
+  my $sql_insert_prot = "INSERT INTO `prot` SET `search_id` = ?, <ARGUMENTS>";
+
+  # argument variables
+  my $prot_collated_args_str  = "";
+  my @prot_collated_args_vals = ();
+  my @args_keys = keys %args;
+  for (my $ai = 0; $ai < @args_keys; $ai++) {
+    my $key = $args_keys[$ai];
     $key =~ s/^prot_//;
-    $collated_arguments_str .= "`" . $key . "` = ?, ";
-    push @collated_arguments_vals, $args{$arg_keys[$ai]};
+    $prot_collated_args_str .= "`" . $key . "` = ?, ";
+    push @prot_collated_args_vals, $args{$args_keys[$ai]};
   }
-  $collated_arguments_str =~ s/, $//;
+  $prot_collated_args_str =~ s/, $//;
 
-  # determine correct SQL and put in arguments
-  my $sql_prot = ($update_prot) ? $sql_update_prot : $sql_insert_prot;
-  $sql_prot =~ s/<ARGUMENTS>/$collated_arguments_str/;
-
-  # execute SQL
-  my $sh = $this->{_conn}->prepare($sql_prot);
-  my $success = $sh->execute(@collated_arguments_vals);
+  # execute the SQL and insert the protein
+  $sql_insert_prot =~ s/<ARGUMENTS>/$prot_collated_args_str/;
+  my $sh = $this->{'_conn'}->prepare($sql_insert_prot);
+  my $success = $sh->execute($search_id, @prot_collated_args_vals);
   if (defined $success && $success != 0) {
-    $this->{'_last_inserted_prot_id'} = $this->{_conn}->last_insert_id(undef, undef, 'prot', 'id');
-  } else {
-    carp "WARNING: failed to insert prot to database ($this->{_conn}->errstr)";
+    $prot_id = $this->{'_conn'}->last_insert_id(undef, undef, 'prot', 'id');
+    $this->{'_last_inserted_prot_id'} = $prot_id;
   }
 
   return $this->{'_last_inserted_prot_id'};
 }
 
-=head2 insert_query
+=head2 
 
  Title:     insert_query
- Usage:     $db_obj->insert_query(...);
- Function:  inserts the information for a query into the database
- Returns:   the query_id from the database
- Arguments: the columns and values to be inserted
+ Usage:     
+ Function:  
+ Returns:   
+ Arguments: 
 
 =cut
 sub insert_query {
-  my $this  = shift;
+  my $this = shift;
   my $search_id = $this->last_inserted_search_id();
   my %args = @_;
 
-  my $sql_insert_query       = "INSERT INTO `query` SET <ARGUMENTS>";
-  my $sql_update_query       = "UPDATE `query` SET <ARGUMENTS> WHERE `search_id` = ? AND `query_number` = ?";
-  my $sql_check_query_exists = "SELECT * FROM `query` WHERE `search_id` = ? AND `query_number` = ?";
-#  my $sql_insert_ion         = "INSERT INTO `ions1` SET `query_id` = ?, `moverz` = ?, `intensity` = ?, `charge` = ?";
-#  my $sql_update_ion         = "UPDATE `ions1` SET `query_id` = ?, `moverz` = ?, `intensity` = ?, `charge` = ?`";  ## BAD SQL ##
-#  my $sql_check_ion_exists   = "SELECT `id` FROM `ions1` WHERE `query_id` = ? AND `moverz` = ? AND `intensity` = ? LIMIT 1";
+  # return if the required arguments aren't supplied
+  my @req_cols = (@{$this->{'_table_required_columns'}->{'query'}});
+  foreach my $req_col (@req_cols) {
+    carp "WARNING: required arguments not supplied to insert_query ($req_col)"
+      if (! defined $args{$req_col});
+  }
 
+  # sql statements
+#  my $sql_insert_query         = "INSERT INTO `query` SET `search_id` = $search_id, <ARGUMENTS>";
+  my $sql_insert_query         = "INSERT INTO `query` SET <ARGUMENTS>";
+  my $sql_update_query         = "UPDATE `query` SET <ARGUMENTS> WHERE `search_id` = $search_id AND `query_number` = ?";
+  my $sql_check_query_exists   = "SELECT * FROM `query` WHERE `search_id` = ? AND `query_number` = ?";
+#  my $sql_insert_query_has_pep = "INSERT INTO `query_has_pep` SET `search_id` = $search_id, `query_id` = ?, `pep_id` = ?, <ARGUMENTS>";
   my $update_query = 0;
   my $update_query_row = undef;
   my $q_id = undef;
@@ -548,7 +552,7 @@ sub insert_query {
   # check for an id in the arguments supplied, and check it is in the database
   # before commiting to updating the database rather than inserting
   if (defined $args{'query_number'} && $args{'query_number'} =~ /^[0-9]+$/) {
-    my $sh = $this->{_conn}->prepare($sql_check_query_exists);
+    my $sh = $this->{'_conn'}->prepare($sql_check_query_exists);
     $sh->execute($search_id, $args{'query_number'});
     if ($sh->rows > 0) {
       $update_query = 1;
@@ -557,50 +561,45 @@ sub insert_query {
     }
   }
 
-  # collate arguments
-  my $collated_arguments_str  = "";
-  my @collated_arguments_vals = ();
-  my %pep_collated_arguments  = ();
-  my @arg_keys = keys %args;
-  for (my $ai = 0; $ai < @arg_keys; $ai++) {
-    my $key = $arg_keys[$ai];
+  # argument variables
+  my $q_collated_args_str    = "";
+  my @q_collated_args_vals   = ();
+  my %pep_collated_args = ();
+  my @args_keys = keys %args;
+  for (my $ai = 0; $ai < @args_keys; $ai++) {
+    my $key = $args_keys[$ai];
     $key =~ tr/[A-Z]/[a-z]/;
     $key =~ s/\s+//g;
-#    next if ($key =~ /^stringions/);
     next if ($update_query && $key =~ /^query_number$/);
-    next if (defined $args{$arg_keys[$ai]} && $args{$arg_keys[$ai]} eq "");
-    $args{$arg_keys[$ai]} =~ s/^([0-9]+)(\-)$/$2$1/ if ($key =~ /^charge$/);
-    $args{$arg_keys[$ai]} =~ s/^([0-9])\+$/$1/ if ($key =~ /^charge$/);
+    next if (defined $args{$args_keys[$ai]} && $args{$args_keys[$ai]} eq "");
+    $args{$args_keys[$ai]} =~ s/^([0-9]+)(\-)$/$2$1/ if ($key =~ /^charge$/);
+    $args{$args_keys[$ai]} =~ s/^([0-9])\+$/$1/ if ($key =~ /^charge$/);
     if ($key =~ /^pep_/) {
-      $pep_collated_arguments{$key} = $args{$arg_keys[$ai]};
-      if ($key =~ /^pep_scan_title$/ && ! defined $args{'StringTitle'} && $collated_arguments_str !~ /stringtitle/) {
-        $collated_arguments_str .= "`stringtitle` = ?, ";
-        push @collated_arguments_vals, $args{$arg_keys[$ai]};
-      }
+      $pep_collated_args{$key} = $args{$args_keys[$ai]};
     } else {
-      $collated_arguments_str .= "`" . $key . "` = ?, ";
-      push @collated_arguments_vals, $args{$arg_keys[$ai]};
+      $q_collated_args_str .= "`" . $key . "` = ?, ";
+      push @q_collated_args_vals, $args{$args_keys[$ai]};
     }
   }
-  $collated_arguments_str     =~ s/, $//;
+  $q_collated_args_str =~ s/, $//;
   if ($update_query) {
-    push @collated_arguments_vals, $search_id;
-    push @collated_arguments_vals, $args{'query_number'};
+    push @q_collated_args_vals, $args{'query_number'};
   } else {
-    $collated_arguments_str .= ", `search_id` = ?";
-    push @collated_arguments_vals, $search_id;
+    $q_collated_args_str .= ", `search_id` = ?";
+    push @q_collated_args_vals, $search_id;
   }
-  $pep_collated_arguments{'pep_query'} = $args{'query_number'};
+  $pep_collated_args{'pep_query'} = $args{'query_number'};
 
   # determine correct SQL and put in arguments
   my $sql_query = ($update_query) ? $sql_update_query : $sql_insert_query;
-  $sql_query =~ s/<ARGUMENTS>/$collated_arguments_str/;
+  $sql_query =~ s/<ARGUMENTS>/$q_collated_args_str/;
+  my $success;
+  my $query_id = 0;
 
-  if ($collated_arguments_str ne "" && @collated_arguments_vals > 0) {
+  if ($q_collated_args_str ne "" && @q_collated_args_vals > 0) {
     # execute SQL
-    my $query_id = 0;
     my $sh = $this->{_conn}->prepare($sql_query);
-    my $success = $sh->execute(@collated_arguments_vals);
+    $success = $sh->execute(@q_collated_args_vals);
     if (defined $success && $success != 0) {
       if ($update_query) {
         $this->{'_last_inserted_query_id'} = $q_id;
@@ -611,60 +610,46 @@ sub insert_query {
     } else {
       carp "WARNING: failed to insert query to database (" . DBI::errstr . ")";
     }
-
-#    # insert string ions
-#    my @ions1 = split /,/, $args{'StringIons1'};
-#    my $sh_ions_select = $this->{_conn}->prepare($sql_check_ion_exists);
-#    for (my $ii = 0; $ii < @ions1; $ii++) {
-#      my ($moverz, $intensity, $charge) = split /:/, $ions1[$ii];
-#
-#      # check whether query in database or, whether need to insert it
-#      my $update_ions = 0;
-#      my $selected_ion = undef;
-#      if ($update_query) {
-#        $success = $sh_ions_select->execute($query_id, $moverz, $intensity);
-#        if (defined $success && $success != 0 && $sh_ions_select->rows > 0) {
-#          $update_ions = 1;
-#          $selected_ion = $sh_ions_select->fetchrow_hashref;
-#          next if ($moverz == $selected_ion->{'moverz'} && $intensity == $selected_ion->{'intensity'} && $query_id == $selected_ion->{'query_id'} && $charge == $selected_ion->{'charge'});
-#        }
-#      }
-#
-#      my $sql_ion = ($update_ions) ? $sql_update_ion : $sql_insert_ion;
-#      my $sh_ion = $this->{_conn}->prepare($sql_ion);
-#      $charge = 'NULL' if (! defined $charge || $charge eq "");
-#      print STDERR "sql: $sql_ion, args: $query_id $moverz, $intensity, $charge\n";
-#      $success = $sh_ion->execute($query_id, $moverz, $intensity, $charge);  ## PROBLEM HERE ##
-#      carp "WARNING: failed to insert ion to database (" . DBI::errstr . ")"
-#        if (! defined $success || $success == 0);
-#    }
-#
   }
 
-  my $insert_pep = $this->insert_pep(%pep_collated_arguments, DONT_INSERT_PROT_HAS_PEP => 0)
-    if (defined $args{'pep_rank'} && $args{'pep_rank'} =~ /^[0-9]+$/);
+  # insert pep info (if it exists)
+  if (defined $args{'pep_rank'} && $args{'pep_rank'} =~ /^[0-9]+$/) {
+    my $pep_id = $this->insert_pep(%pep_collated_args);
+#    # insert query has pep link
+#    my $sh = $this->{'_conn'}->prepare($sql_insert_query_has_pep);
+#    $sh->execute($query_id, $pep_id);
+  }
 
   return $this->{'_last_inserted_query_id'};
 }
 
-=head2 insert_search
+=head2 
 
  Title:     insert_search
- Usage:     $db_obj->insert_search(...);
- Function:  inserts a search into the database
- Returns:   the search_id from the database
- Arguments: the columns and values to be inserted
+ Usage:     
+ Function:  
+ Returns:   
+ Arguments: 
 
 =cut
 sub insert_search {
-  my $this  = shift;
+  my $this = shift;
   my %args = @_;
 
+  # return if the required arguments aren't supplied
+  my @req_cols = (@{$this->{'_table_required_columns'}->{'search'}});
+  foreach my $req_col (@req_cols) {
+    carp "WARNING: required arguments not supplied to insert_search ($req_col)"
+      if (! defined $args{$req_col});
+  }
+
+  # sql statements
   my $sql_insert_search       = "INSERT INTO `search` SET <ARGUMENTS>";
   my $sql_update_search       = "UPDATE `search` SET <ARGUMENTS> WHERE `id` = ?";
-  my $sql_check_search_exists = "SELECT `id` FROM `search` WHERE `id` = ?";
-
+  my $sql_check_search_exists = "SELECT * FROM `search` WHERE `id` = ?";
   my $update_search = 0;
+  my $update_search_row = undef;
+  my $search_id = undef;
 
   # check for an id in the arguments supplied, and check it is in the database
   # before commiting to updating the database rather than inserting
